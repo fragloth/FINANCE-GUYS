@@ -2,56 +2,61 @@ function [dates, discounts]=bootstrap(datesSet, ratesSet)
 %Computes Euribor 3m bootstrap with a single-curve model
 
 % INPUTS 
-% dataSet : structure vector of end dates of underlying contracts
-% rateSet  : structure vector of Underlying Midprice 
+% dateSet : structure vector of end dates of underlying contracts
+% rateSet : structure vector of Underlying bid/ask rates
 
 
 %% Computation of Discount Factors for different assets
 
-t0 = dateSet.settlement; % Settlement Date
+t0 = datesSet.settlement; % Settlement Date 
 
 
-%% Depos -  short-term interest rate :  discounts untilevaluated with depos
+%% Deposits -  short-term interest rate :  discounts untilevaluated with depos
 
-mid_dipos  = (ratesSet.depos(1:md,1)+ratesSet.depos(1:md,2))/2;
-B(1:md)= 1./(1+yearfrac(datesSet.settlement,datesSet.depos(1:md),2).*mid_prices(1:md)); 
+nd = 3; %first 3 depos
+
+mid_depos  = (ratesSet.depos(1:nd,1)+ratesSet.depos(1:nd,2))/2;
+B_depos = 1./(1+yearfrac(datesSet.settlement,datesSet.depos(1:nd),2).*mid_depos(1:nd))'; % row vector
+% B_depos : bootstrap discount factors computed from depos
 
 %% STIR Futures 3M  mid-term interest rates :  discounts evaluated until 2y with futures
 % first 7 futures
 
-mf = 7; % we use first 7 futures contract
+nf = 7; % we use first 7 futures contract
 
-mid_futures  = (ratesSet.futures(1:mf,1) + ratesSet.depos(1:mf,2))/2;
-B_futures_settlement = B(md); %interpolation of first settlement date of future; equal to final B of depos
-B_Forward_futures = 1./(1+yearfrac(datesSet.futures(1:mf,1),datesSet.futures(1:mf,2),2).*mid_futures(1:mf));
+mid_futures  = (ratesSet.futures(1:nf,1) + ratesSet.depos(1:nf,2))/2;
+B_settlement = B_depos(nd); %interpolation of first settlement date of future; equal to final B of depos
+B_forward = 1./(1+yearfrac(datesSet.futures(1:nf,1),datesSet.futures(1:nf,2),2).*mid_futures(1:nf)); %vector of forward discounts
 
+% B_futures : bootstrap discount factors computed from futures
 
-for i = 1:mf
-    B(i + md)=B_futures_settlement*B_forward(i); % B4 to B10
-    B_futures_settlement = interp_log_discounts(B(i),B(i+1),datesSet.futures(i,1),datesSet.futures(i,2),datesSet.futures(i+1,1),t0);
+for i = 1:nf-1
+    B_futures(i) = B_settlement*B_forward(i); % discount factor computed from futures
+    B_settlement = interp_log_discounts(B_settlement,B_futures(i),datesSet.futures(i,1),datesSet.futures(i,2),datesSet.futures(i+1,1),t0);
 end
 
-B(i+mf)=B_futures_settlement*B_forward(mf); % last future
-   
+B_futures(nf)=B_settlement*B_forward(nf); % last future
+
 
 %% SWAP % from the second to the last one
 
-ms = size(rateSet.swaps,1) - 1; % we don't use the first value
+ns = size(ratesSet.swaps,1); 
 
-mid_swaps  = (ratesSet.swaps(2:ms,1) + ratesSet.depos(2:ms,2))/2;
-B_firstyear =  interp_log_discounts(B(3),B(4),datesSet.futures(4,1),datesSet.futures(4,2),datesSet.swap(1),t0);
+mid_swaps  = (ratesSet.swaps(1:ns,1) + ratesSet.swaps(1:ns,2))/2;
 
-BPV=yearfrac(datesSet.settlement,datesSet.swaps(1),6)*B_firstyear; 
+B_firstyear =  interp_log_discounts(B_futures(3),B_futures(4),datesSet.futures(3,2),datesSet.futures(4,2),datesSet.swaps(1),t0);
+BPV=yearfrac( t0 ,datesSet.swaps(1),6)*B_firstyear; 
 
-for i= md+mf+1: md+mf+ms-1  % from 11 to 59
-    B(i)=(1-mid_swaps(i - (md+ mf))*BPV)/(1+yearfrac(datesSet.swaps(i-(md+ mf)),datesSet.swaps(i-(md+ mf-1)),6)*mid_swaps(i -( md+ mf)));
-    BPV=BPV+yearfrac(datesSet.swaps(i - (md + mf - 1 )),datesSet.swaps(i-(md + mf - 2)),6)*B(i); 
-    end
+% B_swaps : bootstrap discount factors computed from swaps
+
+for i= 2:ns  % 
+    B_swaps(i-1) = (1-mid_swaps(i)*BPV)/(1+yearfrac(datesSet.swaps(i-1),datesSet.swaps(i),6)*mid_swaps(i));
+    BPV= BPV + yearfrac(datesSet.swaps(i-1),datesSet.swaps(i),6)*B_swaps(i-1);  % we update BVP at each iteration
 end
 
-discounts= B'; 
+discounts= [B_depos, B_futures , B_swaps]'; 
+dates=[datesSet.depos(1:nd); datesSet.futures(1:nf,2); datesSet.swaps(2:ns)];
 
-dates=[datesSet.depos(1:md); datesSet.futures(1:mf,2); datesSet.swaps(2:ms)];
 
                                                 
 
